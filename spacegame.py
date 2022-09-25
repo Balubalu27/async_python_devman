@@ -1,5 +1,7 @@
 import curses
 import asyncio
+import itertools
+import os
 import time
 import random
 from typing import Coroutine
@@ -12,17 +14,17 @@ def draw(canvas):
     curses.curs_set(0)
     canvas.nodelay(True)
 
-    rocket_frame_1, rocket_frame_2 = get_rocket_frames()
+    rocket_frames = get_rocket_frames()
     height, width = canvas.getmaxyx()
 
-    fire_1 = get_fire_coroutine(canvas, height, width)
-    spaceship = get_spaceship_coroutine(canvas, height, width, rocket_frame_1, rocket_frame_2)
-    blinks = get_blinks_coroutine(canvas, height, width, stars_count=150)
+    fire_coroutine = get_fire_coroutine(canvas, height, width)
+    spaceship_coroutine = get_spaceship_coroutine(canvas, height, width, rocket_frames)
+    blinks_coroutine = get_blinks_coroutine(canvas, height, width, stars_count=150)
 
     coroutines = []
-    coroutines.extend(blinks)
-    coroutines.append(fire_1)
-    coroutines.append(spaceship)
+    coroutines.extend(blinks_coroutine)
+    coroutines.append(fire_coroutine)
+    coroutines.append(spaceship_coroutine)
 
     while True:
         for coroutine in coroutines.copy():
@@ -34,13 +36,24 @@ def draw(canvas):
         time.sleep(0.1)
 
 
-def get_blinks_coroutine(canvas, height, width, stars_count=10, symbols=('*', '+', '.', ':')):
+def get_blinks_coroutine(canvas, height, width, stars_count=10, symbols='*+.:'):
+    distance_from_border = 2
+
+    min_row_coordinate = 1
+    max_row_coordinate = height - distance_from_border
+
+    min_column_number = 1
+    max_column_number = width - distance_from_border
+
+    offset_tics = random.randint(1, 10)
+
     return [
         blink(
             canvas,
-            row=random.randint(1, height - 2),
-            column=random.randint(1, width - 2),
-            symbol=random.choice(symbols)
+            row=random.randint(min_row_coordinate, max_row_coordinate),
+            column=random.randint(min_column_number, max_column_number),
+            symbol=random.choice(symbols),
+            offset_tics=offset_tics
         )
         for _ in range(stars_count)
     ]
@@ -55,60 +68,57 @@ def get_fire_coroutine(canvas, height, width) -> Coroutine:
     )
 
 
-def get_spaceship_coroutine(canvas, height, width, rocket_frame_1, rocket_frame_2) -> Coroutine:
+def get_spaceship_coroutine(canvas, height, width, rocket_frames) -> Coroutine:
     return animate_spaceship(
         canvas,
         row=height // 2,
         column=width // 2,
-        rocket_frame_1=rocket_frame_1,
-        rocket_frame_2=rocket_frame_2
+        rocket_frames=rocket_frames
     )
 
 
-def get_rocket_frames() -> tuple:
-    with open('frames/rocket_frame_1.txt', 'r') as file_1:
-        frame_1 = file_1.read()
-
-    with open('frames/rocket_frame_2.txt', 'r') as file_2:
-        frame_2 = file_2.read()
-
-    return frame_1, frame_2
+def get_rocket_frames() -> list:
+    frames = []
+    for rocket_frame in os.listdir('frames/'):
+        if not rocket_frame.endswith('rocket_frame.txt'):
+            continue
+        with open(f'frames/{rocket_frame}', 'r') as file_1:
+            frames.append(file_1.read())
+    return frames
 
 
 def get_new_spaceship_coordinates(canvas, row, column, frame_size_rows,
                                   frame_size_columns, max_height, max_width) -> tuple:
-    row_d, column_d, space = read_controls(canvas)
-    row = max_height - frame_size_rows if row + row_d > max_height - frame_size_rows else row + row_d
-    if row < 0:
-        row = 0
+    row_direction, column_direction, space = read_controls(canvas)
 
-    column = max_width - frame_size_columns if column + column_d > max_width - frame_size_columns else column + column_d
-    if column < 0:
-        column = 0
+    new_row_coordinate = max(row + row_direction, 0)
+    max_row_coordinate = max_height - frame_size_rows
+    row = min(new_row_coordinate, max_row_coordinate)
+
+    new_column_coordinate = max(column + column_direction, 0)
+    max_column_coordinate = max_width - frame_size_columns
+    column = min(new_column_coordinate, max_column_coordinate)
+
     return row, column
 
 
-async def animate_spaceship(canvas, row, column, rocket_frame_1, rocket_frame_2):
+async def animate_spaceship(canvas, row, column, rocket_frames):
     max_height, max_width = canvas.getmaxyx()
-    frame_size_rows, frame_size_columns = get_frame_size(rocket_frame_1)
-    while True:
+
+    for rocket_frame in itertools.cycle(rocket_frames):
+        frame_size_rows, frame_size_columns = get_frame_size(rocket_frame)
+
         row, column = get_new_spaceship_coordinates(
             canvas, row, column, frame_size_rows,
             frame_size_columns, max_height, max_width
         )
-        draw_frame(canvas, row, column, rocket_frame_1)
-        canvas.refresh()
-        for _ in range(2):
-            await asyncio.sleep(0)
-        draw_frame(canvas, row, column, rocket_frame_1, negative=True)
-        draw_frame(canvas, row, column, rocket_frame_2)
-        canvas.refresh()
-        for _ in range(2):
-            await asyncio.sleep(0)
-        draw_frame(canvas, row, column, rocket_frame_2, negative=True)
+
+        draw_frame(canvas, row, column, rocket_frame)
+        await asyncio.sleep(0)
+        draw_frame(canvas, row, column, rocket_frame, negative=True)
 
 
-async def blink(canvas, row, column, symbol='*'):
+async def blink(canvas, row, column, symbol='*', offset_tics=5):
     while True:
         canvas.addstr(row, column, symbol, curses.A_DIM)
         for _ in range(20):
@@ -124,7 +134,7 @@ async def blink(canvas, row, column, symbol='*'):
         canvas.addstr(row, column, symbol)
         await asyncio.sleep(0)
 
-        for _ in range(random.randint(1, 10)):
+        for _ in range(offset_tics):
             await asyncio.sleep(0)
 
 
